@@ -4,6 +4,7 @@
  */
 import express, { type NextFunction, type Request, type Response } from 'express'
 import path from 'node:path'
+import fs from 'node:fs'
 import config from 'config'
 import { themes } from '../views/themes/themes'
 import * as utils from '../lib/utils'
@@ -101,8 +102,45 @@ router.post('/', (req: Request<Record<string, unknown>, Record<string, unknown>,
       }
 
       if (req.body.layout) {
-        const filePath: string = path.resolve(req.body.layout).toLowerCase()
-        const isForbiddenFile: boolean = (filePath.includes('ftp') || filePath.includes('ctf.key') || filePath.includes('encryptionkeys'))
+        const viewsDirectory = path.resolve(__dirname, '../views')
+        const viewsPrefix = viewsDirectory.toLowerCase() + path.sep
+
+        let layoutInput = typeof req.body.layout === 'string' ? req.body.layout.trim() : ''
+        try {
+          layoutInput = decodeURIComponent(layoutInput)
+        } catch {
+          // ignore malformed URI
+        }
+
+        const normalizedLayout = layoutInput.replace(/\\/g, '/')
+        const resolvedFromRoot = path.resolve(normalizedLayout)
+        const resolvedFromViews = path.resolve(viewsDirectory, normalizedLayout)
+        const rootLower = resolvedFromRoot.toLowerCase()
+        const viewsLower = resolvedFromViews.toLowerCase()
+
+        const isForbiddenKeywords: boolean =
+          rootLower.includes('ftp') || rootLower.includes('ctf.key') || rootLower.includes('encryptionkeys') ||
+          viewsLower.includes('ftp') || viewsLower.includes('ctf.key') || viewsLower.includes('encryptionkeys')
+
+        const isUnderViews: boolean = normalizedLayout.length > 0 &&
+          !normalizedLayout.includes('\0') &&
+          (rootLower.startsWith(viewsPrefix) || viewsLower.startsWith(viewsPrefix))
+
+        const isOutsideRootTraversal: boolean = !rootLower.startsWith(viewsPrefix) && fs.existsSync(resolvedFromRoot)
+
+        let isSymlinkEscape = false
+        if (fs.existsSync(resolvedFromViews)) {
+          try {
+            const realPath = fs.realpathSync(resolvedFromViews).toLowerCase()
+            if (!realPath.startsWith(viewsPrefix)) {
+              isSymlinkEscape = true
+            }
+          } catch {
+            isSymlinkEscape = true
+          }
+        }
+
+        const isForbiddenFile: boolean = isForbiddenKeywords || !isUnderViews || isOutsideRootTraversal || isSymlinkEscape
         if (!isForbiddenFile) {
           res.render('dataErasureResult', {
             ...req.body,
